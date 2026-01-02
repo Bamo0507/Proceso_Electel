@@ -13,6 +13,7 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
 } from "@/components/ui/sidebar"
+import Image from "next/image"
 
 type MenuItem = {
   title: string
@@ -35,7 +36,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         {/* Expanded: logo png */}
         <div className="group-data-[collapsible=icon]:hidden flex w-full items-center justify-center px-0">
-          <img
+          <Image
             src={`/Proceso_Electel/logo.svg`}
             alt="Logo"
             className="h-12 w-auto object-contain"
