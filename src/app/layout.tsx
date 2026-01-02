@@ -23,8 +23,8 @@ export const metadata: Metadata = {
   title: "Electel | Proceso",
   description: "Electel",
   icons: {
-    icon: './Proceso_Electel/logo.svg',
-    apple: './Proceso_Electel/logo.svg',
+    icon: '/Proceso_Electel/logo.svg',
+    apple: '/Proceso_Electel/logo.svg',
   },
 };
 
