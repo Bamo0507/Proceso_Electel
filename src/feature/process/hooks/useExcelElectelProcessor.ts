@@ -80,6 +80,13 @@ function excelSerialToDate(serial: number, date1904: boolean): Date | null {
   return new Date(parsed.y, parsed.m - 1, parsed.d, parsed.H, parsed.M, parsed.S);
 }
 
+function cellToString(cell: XLSX.CellObject | undefined): string {
+  if (!cell) return "";
+  const v = (cell as any).v;
+  if (v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
 function cellToExportString(cell: XLSX.CellObject | undefined, date1904: boolean): string {
   if (!cell) return "";
   const t = (cell as any).t as string | undefined;
@@ -132,24 +139,24 @@ function getPhysicalRowCount(sheet: XLSX.WorkSheet): number {
   return physicalRows;
 }
 
-function getLastColWithValue(sheet: XLSX.WorkSheet, r: number, range: XLSX.Range): number {
-  let last = range.s.c - 1;
 
-  for (let c = range.s.c; c <= range.e.c; c++) {
-    const addr = XLSX.utils.encode_cell({ r, c });
-    const cell = sheet[addr] as XLSX.CellObject | undefined;
-    const v = (cell as any)?.v;
-    if (v !== undefined && v !== null && v !== "") last = c;
-  }
-
-  return last;
-}
-
-function buildTxtFromSheet(sheet: XLSX.WorkSheet, date1904: boolean): { txt: string; physicalRowCount: number } {
+function buildTxtFromSheet(
+  sheet: XLSX.WorkSheet,
+  date1904: boolean,
+  timestampCol: number | null
+): { txt: string; physicalRowCount: number } {
   const ref = sheet["!ref"];
   if (!ref) return { txt: "", physicalRowCount: 0 };
 
   const range = XLSX.utils.decode_range(ref);
+
+  // Columns to include (skip timestamp column entirely)
+  const includeCols: number[] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    if (timestampCol !== null && c === timestampCol) continue;
+    includeCols.push(c);
+  }
+
   let out = "";
   let physicalRows = 0;
 
@@ -169,10 +176,26 @@ function buildTxtFromSheet(sheet: XLSX.WorkSheet, date1904: boolean): { txt: str
 
     physicalRows++;
 
-    const lastCol = getLastColWithValue(sheet, r, range);
-    const parts: string[] = [];
+    // find last included column with value (to match Java row.getLastCellNum behavior loosely)
+    let lastIncludedIndex = -1;
+    for (let i = 0; i < includeCols.length; i++) {
+      const c = includeCols[i];
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[addr] as XLSX.CellObject | undefined;
+      const v = (cell as any)?.v;
+      if (v !== undefined && v !== null && v !== "") lastIncludedIndex = i;
+    }
 
-    for (let c = range.s.c; c <= lastCol; c++) {
+    // If nothing in included columns, still output empty line? Java would output tabs only up to lastCellNum.
+    // Here, if row is physical but all included cells are empty, we output just a blank line.
+    if (lastIncludedIndex < 0) {
+      out += "\n";
+      continue;
+    }
+
+    const parts: string[] = [];
+    for (let i = 0; i <= lastIncludedIndex; i++) {
+      const c = includeCols[i];
       const addr = XLSX.utils.encode_cell({ r, c });
       const cell = sheet[addr] as XLSX.CellObject | undefined;
       parts.push(cellToExportString(cell, date1904));
@@ -201,9 +224,38 @@ function getDateFromCell(sheet: XLSX.WorkSheet, r: number, c: number, date1904: 
   return null;
 }
 
-function calculateExpectedRows(sheet: XLSX.WorkSheet, date1904: boolean): number | null {
-  // Java: sheet.getRow(1).getCell(0).getDateCellValue();
-  const d = getDateFromCell(sheet, 1, 0, date1904);
+function findColumnIndexes(sheet: XLSX.WorkSheet): {
+  localTimeCol: number | null;
+  timestampCol: number | null;
+} {
+  const ref = sheet["!ref"];
+  if (!ref) return { localTimeCol: null, timestampCol: null };
+
+  const range = XLSX.utils.decode_range(ref);
+  const headerRow = range.s.r; // header is the first row in range
+
+  let localTimeCol: number | null = null;
+  let timestampCol: number | null = null;
+
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const addr = XLSX.utils.encode_cell({ r: headerRow, c });
+    const cell = sheet[addr] as XLSX.CellObject | undefined;
+    const text = cellToString(cell).toLowerCase();
+
+    if (text === "local time") localTimeCol = c;
+    if (text === "timestamp") timestampCol = c;
+  }
+
+  return { localTimeCol, timestampCol };
+}
+
+function calculateExpectedRows(
+  sheet: XLSX.WorkSheet,
+  date1904: boolean,
+  localTimeCol: number
+): number | null {
+  // Java original: row 2, col 1. Here: row 2, column "Local Time"
+  const d = getDateFromCell(sheet, 1, localTimeCol, date1904);
   if (!d) return null;
 
   const year = d.getFullYear();
@@ -214,14 +266,19 @@ function calculateExpectedRows(sheet: XLSX.WorkSheet, date1904: boolean): number
   return daysInMonth * 24 * 4 + 1;
 }
 
-function findMissingTime(sheet: XLSX.WorkSheet, expectedRows: number, date1904: boolean): string | null {
+function findMissingTime(
+  sheet: XLSX.WorkSheet,
+  expectedRows: number,
+  date1904: boolean,
+  localTimeCol: number
+): string | null {
   const ref = sheet["!ref"];
   if (!ref) return null;
 
   const range = XLSX.utils.decode_range(ref);
   const existingTimes = new Set<string>();
 
-  // Recolecta fechas de la primera columna (c=0) en filas con contenido (desde la 2da fila)
+  // Recolecta fechas de la columna Local Time en filas con contenido (desde la 2da fila)
   for (let r = range.s.r + 1; r <= range.e.r; r++) {
     // solo considerar filas "físicas"
     let hasAnyValue = false;
@@ -236,7 +293,7 @@ function findMissingTime(sheet: XLSX.WorkSheet, expectedRows: number, date1904: 
     }
     if (!hasAnyValue) continue;
 
-    const d = getDateFromCell(sheet, r, 0, date1904);
+    const d = getDateFromCell(sheet, r, localTimeCol, date1904);
     if (d) existingTimes.add(formatDate(d));
   }
 
@@ -359,8 +416,11 @@ export function useExcelElectelProcessor() {
 
         const date1904 = !!(workbook as any).Workbook?.WBProps?.date1904;
 
-        // expected rows (Java)
-        const expectedRows = calculateExpectedRows(picked.sheet, date1904);
+        const { localTimeCol, timestampCol } = findColumnIndexes(picked.sheet);
+        const localTimeIndex = localTimeCol ?? 0; // fallback defensivo
+
+        // expected rows (Java) - basado en columna "Local Time"
+        const expectedRows = calculateExpectedRows(picked.sheet, date1904, localTimeIndex);
         if (!expectedRows) {
           invalid.push({
             fileName: file.name,
@@ -372,7 +432,7 @@ export function useExcelElectelProcessor() {
           const physicalRows = picked.rows;
 
           if (physicalRows !== expectedRows) {
-            const missing = findMissingTime(picked.sheet, expectedRows, date1904);
+            const missing = findMissingTime(picked.sheet, expectedRows, date1904, localTimeIndex);
             if (missing) {
               invalid.push({
                 fileName: file.name,
@@ -384,7 +444,7 @@ export function useExcelElectelProcessor() {
         }
 
         // Export TXT (tab separated) detectando fecha por formato de celda
-        const { txt: txtContent } = buildTxtFromSheet(picked.sheet, date1904);
+        const { txt: txtContent } = buildTxtFromSheet(picked.sheet, date1904, timestampCol);
         const txtName = javaLikeTxtName(file.name);
         zip.file(txtName, txtContent);
       }
