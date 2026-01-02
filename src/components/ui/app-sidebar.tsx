@@ -1,7 +1,6 @@
 "use client"
 
 import Link from "next/link"
-import Image from "next/image"
 import { FileInput } from "lucide-react"
 import {
   Sidebar,
@@ -36,7 +35,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         {/* Expanded: logo png */}
         <div className="group-data-[collapsible=icon]:hidden flex w-full items-center justify-center px-0">
-          <Image
+          <img
             src={`Proceso_Electel/logo.svg`}
             alt="Logo"
             className="h-12 w-auto object-contain"
