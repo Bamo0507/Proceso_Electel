@@ -37,7 +37,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         {/* Expanded: logo png */}
         <div className="group-data-[collapsible=icon]:hidden flex w-full items-center justify-center px-0">
           <Image
-            src={`/Proceso_Electel/logo.svg`}
+            src={`./Proceso_Electel/logo.svg`}
+            width={120}
+            height={120}
             alt="Logo"
             className="h-12 w-auto object-contain"
           />
