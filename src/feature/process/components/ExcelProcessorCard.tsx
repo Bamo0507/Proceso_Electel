@@ -5,7 +5,6 @@ import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, FilePlus2, Loader2, Trash2 } from "lucide-react";
 import { useExcelElectelProcessor } from "@/feature/process/hooks/useExcelElectelProcessor";
-import { Toaster } from "sonner";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -38,13 +37,11 @@ export function ExcelProcessorCard() {
     getFileKey,
   } = useExcelElectelProcessor();
 
-  const [downloadName, setDownloadName] = React.useState("ArchivosModificados.zip");
   const [showAllFiles, setShowAllFiles] = React.useState(false);
 
   React.useEffect(() => {
     if (status === "done" && zipUrl) {
       const name = buildZipName(new Date());
-      setDownloadName(name);
 
       // Auto-descarga: dispara el download apenas el ZIP está listo
       const a = document.createElement("a");
