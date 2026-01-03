@@ -52,10 +52,6 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function formatNumber2(n: number): string {
-  return round2(n).toFixed(2);
-}
-
 function isDateFormattedCell(cell: XLSX.CellObject | undefined): boolean {
   if (!cell) return false;
 
@@ -87,32 +83,6 @@ function cellToString(cell: XLSX.CellObject | undefined): string {
   return String(v).trim();
 }
 
-function cellToExportString(cell: XLSX.CellObject | undefined, date1904: boolean): string {
-  if (!cell) return "";
-  const t = (cell as any).t as string | undefined;
-  const v = (cell as any).v;
-
-  if (v === undefined || v === null) return "";
-
-  if (t === "s" || t === "str") return String(v);
-  if (t === "b") return String(v);
-
-  // Date directa
-  if (t === "d" && v instanceof Date) return formatDate(v);
-
-  // Numérico: decidir si es fecha por formato (como POI)
-  if (t === "n") {
-    if (isDateFormattedCell(cell)) {
-      const d = excelSerialToDate(Number(v), date1904);
-      return d ? formatDate(d) : "";
-    }
-    return formatNumber2(Number(v));
-  }
-
-  // Fórmulas: SheetJS suele dejar el valor evaluado en v
-  return String(v);
-}
-
 function getPhysicalRowCount(sheet: XLSX.WorkSheet): number {
   const ref = sheet["!ref"];
   if (!ref) return 0;
@@ -139,72 +109,125 @@ function getPhysicalRowCount(sheet: XLSX.WorkSheet): number {
   return physicalRows;
 }
 
+function cloneSheetWithoutColumn(
+  sheet: XLSX.WorkSheet,
+  colToRemove: number | null
+): XLSX.WorkSheet {
+  if (colToRemove === null) return sheet;
+
+  const ref = sheet["!ref"];
+  if (!ref) return sheet;
+
+  const range = XLSX.utils.decode_range(ref);
+
+  // Build a new sheet object with shifted columns.
+  const out: XLSX.WorkSheet = {} as XLSX.WorkSheet;
+
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      if (c === colToRemove) continue;
+
+      const fromAddr = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[fromAddr] as XLSX.CellObject | undefined;
+      if (!cell) continue;
+
+      // Shift columns left if they are after the removed column
+      const newC = c > colToRemove ? c - 1 : c;
+      const toAddr = XLSX.utils.encode_cell({ r, c: newC });
+
+      // Shallow clone cell to avoid accidental mutation
+      out[toAddr] = { ...(cell as any) } as XLSX.CellObject;
+    }
+  }
+
+  // Update !ref to reflect removed column
+  const newRange: XLSX.Range = {
+    s: { r: range.s.r, c: range.s.c },
+    e: { r: range.e.r, c: range.e.c - 1 },
+  };
+  out["!ref"] = XLSX.utils.encode_range(newRange);
+
+  // Preserve merges if present (note: merges that touch removed col may be off; acceptable for TXT export)
+  if ((sheet as any)["!merges"]) {
+    (out as any)["!merges"] = (sheet as any)["!merges"];
+  }
+
+  return out;
+}
+
 
 function buildTxtFromSheet(
   sheet: XLSX.WorkSheet,
   date1904: boolean,
-  timestampCol: number | null
+  timestampCol: number | null,
+  localTimeCol: number
 ): { txt: string; physicalRowCount: number } {
-  const ref = sheet["!ref"];
-  if (!ref) return { txt: "", physicalRowCount: 0 };
+  // Keep physical row count logic for validations (POI-like)
+  const physicalRowCount = getPhysicalRowCount(sheet);
 
-  const range = XLSX.utils.decode_range(ref);
+  // Remove the entire "timestamp" column before export
+  const sheetNoTs = cloneSheetWithoutColumn(sheet, timestampCol);
 
-  // Columns to include (skip timestamp column entirely)
-  const includeCols: number[] = [];
-  for (let c = range.s.c; c <= range.e.c; c++) {
-    if (timestampCol !== null && c === timestampCol) continue;
-    includeCols.push(c);
-  }
+  // If we removed a column before Local Time, its index shifts left by 1 in the cloned sheet
+  const localTimeColAdjusted =
+    timestampCol !== null && localTimeCol > timestampCol ? localTimeCol - 1 : localTimeCol;
 
-  let out = "";
-  let physicalRows = 0;
+  // Force ALL non-date numeric cells to be formatted with exactly 2 decimals.
+  // We skip the Local Time column to avoid accidentally formatting date serials as numbers.
+  (function forceTwoDecimalsOnNumericCells(ws: XLSX.WorkSheet) {
+    const ref = ws["!ref"];
+    if (!ref) return;
 
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    // simula "physical rows": solo filas con algún valor
-    let hasAnyValue = false;
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const addr = XLSX.utils.encode_cell({ r, c });
-      const cell = sheet[addr] as XLSX.CellObject | undefined;
-      const v = (cell as any)?.v;
-      if (v !== undefined && v !== null && v !== "") {
-        hasAnyValue = true;
-        break;
+    const range = XLSX.utils.decode_range(ref);
+
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        if (c === localTimeColAdjusted) continue;
+
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr] as XLSX.CellObject | undefined;
+        if (!cell) continue;
+
+        const t = (cell as any).t as string | undefined;
+        if (t !== "n") continue;
+
+        // If it's a date-formatted cell, keep it as date
+        if (isDateFormattedCell(cell)) continue;
+
+        const v = (cell as any).v;
+        if (typeof v !== "number" || Number.isNaN(v)) continue;
+
+        // Match Java rounding behavior and ensure two-decimal formatting in SSF
+        const rounded = round2(v);
+        (cell as any).v = rounded;
+        (cell as any).z = "0.00";
+        // Force the displayed/formatted string too (important for values like 0 -> 0.00)
+        (cell as any).w = rounded.toFixed(2);
       }
     }
-    if (!hasAnyValue) continue;
+  })(sheetNoTs);
 
-    physicalRows++;
+  // Emulate Excel "Text (Tab delimited)" as closely as possible.
+  // FS = field separator (TAB), RS = record separator (newline)
+  // raw=false lets SSF formatting apply when available; defval ensures empty cells are present.
+  const txt = XLSX.utils.sheet_to_csv(
+    sheetNoTs,
+    {
+      FS: "\t",
+      RS: "\r\n",
+      strip: false,
+      blankrows: false,
+      raw: false,
+      defval: "",
+      // Match Excel Tab-Delimited export style seen in provided sample: 2025-Dec-01 00:00:00.000
+      dateNF: "yyyy-mmm-dd hh:mm:ss.000",
+    } as any
+  );
 
-    // find last included column with value (to match Java row.getLastCellNum behavior loosely)
-    let lastIncludedIndex = -1;
-    for (let i = 0; i < includeCols.length; i++) {
-      const c = includeCols[i];
-      const addr = XLSX.utils.encode_cell({ r, c });
-      const cell = sheet[addr] as XLSX.CellObject | undefined;
-      const v = (cell as any)?.v;
-      if (v !== undefined && v !== null && v !== "") lastIncludedIndex = i;
-    }
+  // Ensure final newline like Excel/Windows exports (CRLF)
+  const withNewline = txt.endsWith("\r\n") ? txt : txt + "\r\n";
 
-    // If nothing in included columns, still output empty line? Java would output tabs only up to lastCellNum.
-    // Here, if row is physical but all included cells are empty, we output just a blank line.
-    if (lastIncludedIndex < 0) {
-      out += "\n";
-      continue;
-    }
-
-    const parts: string[] = [];
-    for (let i = 0; i <= lastIncludedIndex; i++) {
-      const c = includeCols[i];
-      const addr = XLSX.utils.encode_cell({ r, c });
-      const cell = sheet[addr] as XLSX.CellObject | undefined;
-      parts.push(cellToExportString(cell, date1904));
-    }
-
-    out += parts.join("\t") + "\n";
-  }
-
-  return { txt: out, physicalRowCount: physicalRows };
+  return { txt: withNewline, physicalRowCount };
 }
 
 function getDateFromCell(sheet: XLSX.WorkSheet, r: number, c: number, date1904: boolean): Date | null {
@@ -444,7 +467,12 @@ export function useExcelElectelProcessor() {
         }
 
         // Export TXT (tab separated) detectando fecha por formato de celda
-        const { txt: txtContent } = buildTxtFromSheet(picked.sheet, date1904, timestampCol);
+        const { txt: txtContent } = buildTxtFromSheet(
+          picked.sheet,
+          date1904,
+          timestampCol,
+          localTimeIndex
+        );
         const txtName = javaLikeTxtName(file.name);
         zip.file(txtName, txtContent);
       }
