@@ -5,6 +5,7 @@ import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, FilePlus2, Loader2, Trash2 } from "lucide-react";
 import { useExcelElectelProcessor } from "@/feature/process/hooks/useExcelElectelProcessor";
+import { RowValidationCard } from "@/feature/process/components/RowValidationCard";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -25,6 +26,7 @@ export function ExcelProcessorCard() {
     status,
     errorMessage,
     invalidFiles,
+    rowValidations,
     zipUrl,
     isLoading,
     fileInputRef,
@@ -83,6 +85,7 @@ export function ExcelProcessorCard() {
   const visibleFiles = showAllFiles ? files : files.slice(0, 10);
 
   return (
+    <>
     <Card className="mt-6">
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -226,8 +229,8 @@ export function ExcelProcessorCard() {
 
       <CardFooter className="flex items-center justify-end gap-2">
         {!isDone && (
-          <Button 
-          onClick={processFiles} 
+          <Button
+          onClick={processFiles}
           disabled={!isReady || isLoading}
           >
             {isLoading ? (
@@ -242,5 +245,10 @@ export function ExcelProcessorCard() {
         )}
       </CardFooter>
     </Card>
+
+    {isDone && rowValidations.length > 0 && (
+      <RowValidationCard validations={rowValidations} />
+    )}
+    </>
   );
 }

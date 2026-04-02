@@ -22,7 +22,7 @@ type MenuItem = {
 }
 
 const menuItems: MenuItem[] = [
-  { title: "Excel Proceso", url: "/process", icon: FileInput }
+  { title: "Excel Proceso", url: "/", icon: FileInput }
 ]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {

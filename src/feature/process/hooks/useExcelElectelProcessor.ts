@@ -5,20 +5,7 @@ import React from "react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { toast } from "sonner";
-
-export type ProcessorStatus = "idle" | "ready" | "processing" | "done";
-
-export type InvalidFileInfo = {
-  fileName: string;
-  sheetName: string;
-  missingTime: string; // "dd-MM-yyyy HH:mm:ss" o mensaje si no pudo calcular
-};
-
-export type ProcessResult = {
-  zipBlob: Blob;
-  invalidFiles: InvalidFileInfo[];
-  processedCount: number;
-};
+import type { ProcessorStatus, InvalidFileInfo, RowCountValidation, ProcessResult } from "@/feature/process/models";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -362,6 +349,7 @@ export function useExcelElectelProcessor() {
   const [status, setStatus] = React.useState<ProcessorStatus>("idle");
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [invalidFiles, setInvalidFiles] = React.useState<InvalidFileInfo[]>([]);
+  const [rowValidations, setRowValidations] = React.useState<RowCountValidation[]>([]);
   const [zipUrl, setZipUrl] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
 
@@ -372,6 +360,7 @@ export function useExcelElectelProcessor() {
   const clearResults = () => {
     setErrorMessage(null);
     setInvalidFiles([]);
+    setRowValidations([]);
     if (zipUrl) URL.revokeObjectURL(zipUrl);
     setZipUrl(null);
   };
@@ -428,6 +417,7 @@ export function useExcelElectelProcessor() {
 
     const zip = new JSZip();
     const invalid: InvalidFileInfo[] = [];
+    const rowChecks: RowCountValidation[] = [];
 
     try {
       for (const file of files) {
@@ -444,15 +434,29 @@ export function useExcelElectelProcessor() {
 
         // expected rows (Java) - basado en columna "Local Time"
         const expectedRows = calculateExpectedRows(picked.sheet, date1904, localTimeIndex);
+        const physicalRows = picked.rows;
+
         if (!expectedRows) {
           invalid.push({
             fileName: file.name,
             sheetName: picked.name,
             missingTime: "No se pudo leer la fecha base (fila 2, col 1).",
           });
+          rowChecks.push({
+            fileName: file.name,
+            sheetName: picked.name,
+            actualRows: physicalRows,
+            expectedRows: 0,
+            isValid: false,
+          });
         } else {
-          // validate rows count usando "physical rows" (como POI)
-          const physicalRows = picked.rows;
+          rowChecks.push({
+            fileName: file.name,
+            sheetName: picked.name,
+            actualRows: physicalRows,
+            expectedRows,
+            isValid: physicalRows === expectedRows,
+          });
 
           if (physicalRows !== expectedRows) {
             const missing = findMissingTime(picked.sheet, expectedRows, date1904, localTimeIndex);
@@ -482,13 +486,14 @@ export function useExcelElectelProcessor() {
 
       setZipUrl(url);
       setInvalidFiles(invalid);
+      setRowValidations(rowChecks);
       setStatus("done");
       setIsLoading(false);
-      
+
       // Mostrar notificación de éxito
       toast.success("¡Archivos procesados exitosamente!");
 
-      return { zipBlob, invalidFiles: invalid, processedCount: files.length };
+      return { zipBlob, invalidFiles: invalid, rowValidations: rowChecks, processedCount: files.length };
     } catch (err: any) {
       setIsLoading(false);
       setStatus("ready");
@@ -525,6 +530,7 @@ export function useExcelElectelProcessor() {
     status,
     errorMessage,
     invalidFiles,
+    rowValidations,
     zipUrl,
     isLoading,
     fileInputRef,
